@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import joblib
 import os
+import numpy as np
+import matplotlib.pyplot as plt
 
 from sklearn.metrics import (
     accuracy_score, roc_auc_score, precision_score,
@@ -12,8 +14,8 @@ from sklearn.metrics import (
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Heart Disease Dashboard", layout="wide")
-st.title("🫀 Heart Disease Prediction Dashboard")
+st.set_page_config(page_title="Cardiovascular Disease Classification", layout="wide")
+st.title("🫀 Cardiovascular Disease Classification")
 
 MODEL_DIR = "models"
 DEFAULT_TEST = "test.csv"
@@ -29,26 +31,49 @@ MODEL_MAP = {
 }
 
 # ============================================================
-# SIDEBAR
+# SIDEBAR – MODEL SELECTION (DROPDOWN MULTISELECT)
 # ============================================================
-use_default = st.sidebar.checkbox("Use default test dataset")
-uploaded = None if use_default else st.sidebar.file_uploader("Upload CSV", type=["csv"])
-model_name = st.sidebar.selectbox("Select Model", list(MODEL_MAP.keys()))
+st.sidebar.header("⚙️ Controls")
 
-# ============================================================
-# LOAD MODEL
-# ============================================================
-model_file, needs_scaling = MODEL_MAP[model_name]
+model_names = list(MODEL_MAP.keys())
 
-model_path = os.path.join(MODEL_DIR, model_file)
-scaler_path = os.path.join(MODEL_DIR, "scaler.pkl")
+selected_models = st.sidebar.multiselect(
+    "Select Models",
+    options=model_names,
+    default=model_names[0:2],
+    label_visibility="visible"
+)
 
-if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-    st.error("Model or scaler missing inside models/ folder.")
+# ---------- Custom CSS to hide red chips ----------
+st.markdown(
+    """
+    <style>
+    /* Hide selected chips inside multiselect */
+    div[data-baseweb="tag"] {
+        display: none !important;
+    }
+
+    /* Make dropdown look like single clean box */
+    div[data-baseweb="select"] > div {
+        min-height: 40px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+if not selected_models:
+    st.sidebar.warning("Select at least one model.")
     st.stop()
 
-model = joblib.load(model_path)
-scaler = joblib.load(scaler_path)
+with st.sidebar.expander("📂 Test Dataset", expanded=True):
+    uploaded = st.file_uploader("Upload CSV (optional)", type=["csv"])
+    use_default = st.checkbox("Use default test dataset", value=True)
+
+    if use_default:
+        st.caption("Using default test dataset. Uncheck to upload custom data.")
+
 
 # ============================================================
 # LOAD DATA
@@ -60,21 +85,36 @@ def load_data():
         return pd.read_csv(uploaded)
     return None
 
-data = load_data()
 
 # ============================================================
-# TABS (PLAYGROUND FIRST → DEFAULT)
+# LOAD MODEL
+# ============================================================
+def load_model_and_scaler(model_name):
+    model_file, needs_scaling = MODEL_MAP[model_name]
+
+    model_path = os.path.join(MODEL_DIR, model_file)
+    scaler_path = os.path.join(MODEL_DIR, "scaler.pkl")
+
+    model = joblib.load(model_path) if os.path.exists(model_path) else None
+    scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
+
+    return model, scaler, needs_scaling
+
+
+# ============================================================
+# TABS
 # ============================================================
 tab_play, tab_training, tab_readme = st.tabs(
     ["🧪 Playground", "📊 Training Insights", "📘 README"]
 )
+
 
 # ============================================================
 # 🧪 PLAYGROUND
 # ============================================================
 with tab_play:
 
-    st.header("Prediction Playground")
+    data = load_data()
 
     if data is None:
         st.info("Upload or enable default dataset from sidebar.")
@@ -82,8 +122,7 @@ with tab_play:
 
     data = data.drop(columns=[c for c in data.columns if "Unnamed" in c], errors="ignore")
 
-    st.success("Dataset is editable. Modify values and click **Run Prediction**.")
-
+    st.info("💡 Double-click any cell to edit values in the **test dataset**.")
     edited = st.data_editor(data, use_container_width=True)
 
     if st.button("Run Prediction"):
@@ -95,102 +134,104 @@ with tab_play:
         X = edited.drop(columns=[TARGET])
         y = edited[TARGET]
 
-        if needs_scaling:
-            X = scaler.transform(X)
+        # ---------- Collect results ----------
+        results = []
 
-        y_pred = model.predict(X)
-        y_prob = model.predict_proba(X)[:, 1]
+        for model_name in selected_models:
 
-        acc = accuracy_score(y, y_pred)
-        auc = roc_auc_score(y, y_prob)
-        prec = precision_score(y, y_pred)
-        rec = recall_score(y, y_pred)
-        f1 = f1_score(y, y_pred)
-        mcc = matthews_corrcoef(y, y_pred)
+            model, scaler, needs_scaling = load_model_and_scaler(model_name)
 
-        left, right = st.columns([2, 1])
+            if model is None:
+                continue
 
-        with left:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Accuracy", f"{acc:.3f}")
-            c1.metric("AUC", f"{auc:.3f}")
-            c2.metric("Precision", f"{prec:.3f}")
-            c2.metric("Recall", f"{rec:.3f}")
-            c3.metric("F1", f"{f1:.3f}")
-            c3.metric("MCC", f"{mcc:.3f}")
+            X_input = scaler.transform(X) if (needs_scaling and scaler is not None) else X
 
-        with right:
+            y_pred = model.predict(X_input)
+            y_prob = model.predict_proba(X_input)[:, 1]
+
+            results.append({
+                "Model": model_name,
+                "Accuracy": accuracy_score(y, y_pred),
+                "AUC": roc_auc_score(y, y_prob),
+                "Precision": precision_score(y, y_pred),
+                "Recall": recall_score(y, y_pred),
+                "F1": f1_score(y, y_pred),
+                "MCC": matthews_corrcoef(y, y_pred)
+            })
+
+        if not results:
+            st.error("No models available for prediction.")
+            st.stop()
+
+        # ---------- Performance Table ----------
+        st.subheader(f"📊 Model Performance Comparison : {len(selected_models)}/{len(model_names)} Models Selected")
+
+
+
+        df_results = pd.DataFrame(results).sort_values("AUC", ascending=False)
+
+        st.dataframe(
+            df_results.style.format({
+                "Accuracy": "{:.3f}",
+                "AUC": "{:.3f}",
+                "Precision": "{:.3f}",
+                "Recall": "{:.3f}",
+                "F1": "{:.3f}",
+                "MCC": "{:.3f}",
+            }),
+            use_container_width=True
+        )
+
+        # ---------- Confusion Matrices ----------
+        st.subheader("Confusion Matrices")
+
+        cols = st.columns(len(results))
+
+        for col, res in zip(cols, results):
+
+            model_name = res["Model"]
+            model, scaler, needs_scaling = load_model_and_scaler(model_name)
+
+            X_input = scaler.transform(X) if (needs_scaling and scaler is not None) else X
+            y_pred = model.predict(X_input)
+
             cm = confusion_matrix(y, y_pred)
-            st.dataframe(pd.DataFrame(cm))
+
+            cm_df = pd.DataFrame(
+                cm,
+                index=["Actual 0", "Actual 1"],
+                columns=["Pred 0", "Pred 1"]
+            )
+
+            col.write(f"**{model_name}**")
+            col.dataframe(cm_df)
+
 
 # ============================================================
-# 📊 TRAINING INSIGHTS (ROBUST AUTO-INIT)
+# 📊 TRAINING INSIGHTS
 # ============================================================
 with tab_training:
 
-    st.header("Training Insights")
+    st.header("Insights")
 
-    summary_path = os.path.join(MODEL_DIR, "training_summary.pkl")
     scores_path = os.path.join(MODEL_DIR, "training_scores.pkl")
+    class_path = os.path.join(MODEL_DIR, "class_dist.pkl")
 
-    # ---------- Ensure training_scores exists ----------
     if not os.path.exists(scores_path):
-        st.error("training_scores.pkl missing in models/.")
-        st.info("Run training pipeline once to generate evaluation metrics.")
+        st.warning("training_scores.pkl missing. Run training pipeline first.")
         st.stop()
 
+    # ---------- Load scores ----------
     training_scores = joblib.load(scores_path)
 
-    # ---------- Auto-generate training summary ----------
-    if not os.path.exists(summary_path):
-
-        st.warning("training_summary.pkl missing → generating automatically...")
-
-        summary = {}
-
-        for name, (file, _) in MODEL_MAP.items():
-
-            model_file_path = os.path.join(MODEL_DIR, file)
-
-            if not os.path.exists(model_file_path):
-                continue
-
-            model_obj = joblib.load(model_file_path)
-
-            params = model_obj.get_params() if hasattr(model_obj, "get_params") else {}
-
-            convergence = "Trained successfully"
-            if "max_iter" in params:
-                convergence = f"Max iterations = {params['max_iter']}"
-
-            if hasattr(model_obj, "n_iter_"):
-                try:
-                    convergence = f"Converged in {model_obj.n_iter_} iterations"
-                except Exception:
-                    pass
-
-            scores = training_scores.get(file, {})
-
-            summary[name] = {
-                "hyperparameters": params,
-                "convergence": convergence,
-                "scores": scores,
-            }
-
-        joblib.dump(summary, summary_path)
-        st.success("training_summary.pkl generated successfully.")
-
-    # ---------- Load summary ----------
-    summary = joblib.load(summary_path)
-
-    if not summary:
-        st.error("Training summary is empty.")
-        st.stop()
-
-    # ---------- Display table ----------
+    # ---------- Build performance table ----------
     rows = []
-    for model_name, info in summary.items():
-        scores = info.get("scores", {})
+
+    for filename, scores in training_scores.items():
+
+        # Clean model display name
+        model_name = filename.replace(".pkl", "").replace("_", " ").title()
+
         rows.append({
             "Model": model_name,
             "Accuracy": scores.get("accuracy"),
@@ -198,42 +239,78 @@ with tab_training:
             "Precision": scores.get("precision"),
             "Recall": scores.get("recall"),
             "F1": scores.get("f1"),
-            "Convergence": info.get("convergence"),
+            "MCC": scores.get("mcc"),
         })
 
+    df_scores = pd.DataFrame(rows)
+
+
+    # ---------- Display ----------
     st.subheader("Model Performance Summary")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.dataframe(df_scores, use_container_width=True)
 
     st.divider()
 
-    # ---------- ROC / PR / Class Distribution ----------
-    roc_path = os.path.join(MODEL_DIR, "roc_data.pkl")
-    pr_path = os.path.join(MODEL_DIR, "pr_data.pkl")
-    class_path = os.path.join(MODEL_DIR, "class_dist.pkl")
-
-    if os.path.exists(roc_path) and os.path.exists(pr_path):
-        roc_data = joblib.load(roc_path)
-        pr_data = joblib.load(pr_path)
-
-        st.subheader("ROC Curve")
-        st.line_chart(pd.DataFrame({"TPR": roc_data["tpr"]}, index=roc_data["fpr"]))
-
-        st.subheader("Precision-Recall Curve")
-        st.line_chart(pd.DataFrame({"Precision": pr_data["precision"]}, index=pr_data["recall"]))
-    else:
-        st.warning("ROC / PR data not found.")
-
     if os.path.exists(class_path):
-        class_dist = joblib.load(class_path)
+
+        class_dist = joblib.load(class_path)   # already contains counts
+
+        # ---- Map labels ----
+        label_map = {
+            0: "Healthy",
+            1: "Diseased"
+        }
+
+        labels = [label_map.get(int(i), f"Class {i}") for i in class_dist.index]
+        values = class_dist.values
+
         st.subheader("Class Distribution")
-        st.bar_chart(class_dist)
+
+        # ---- Smaller clean figure ----
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        bars = ax.bar(labels, values)
+
+        # ---- Add count labels on bars ----
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                height,
+                f"{int(height)}",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+                fontweight="bold"
+            )
+
+        ax.set_xlabel("Class", fontsize=10)
+        ax.set_ylabel("Count", fontsize=10)
+        ax.set_title("Dataset Class Distribution", fontsize=11)
+
+        st.pyplot(fig, use_container_width=False)
+
+    else:
+        st.info("class_dist.pkl not found.")
+
+
 
 # ============================================================
-# 📘 README
+# 📘 README (FIXED VISIBILITY)
 # ============================================================
 with tab_readme:
 
-    if os.path.exists("README.md"):
-        st.markdown(open("README.md", encoding="utf-8").read())
+    st.header("Project Documentation")
+
+    readme_path = "README.md"
+
+    if os.path.exists(readme_path):
+        with open(readme_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if content.strip():
+            st.markdown(content)
+        else:
+            st.warning("README.md is empty.")
     else:
-        st.info("README.md not found.")
+        st.warning("README.md file not found in project root.")
