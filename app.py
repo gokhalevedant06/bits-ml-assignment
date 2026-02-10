@@ -10,143 +10,103 @@ from sklearn.metrics import (
 )
 
 # ============================================================
-# PAGE CONFIG
+# CONFIG
 # ============================================================
-st.set_page_config(page_title="ML Clinical Dashboard", layout="wide")
+st.set_page_config(page_title="Heart Disease Dashboard", layout="wide")
 st.title("🫀 Heart Disease Prediction Dashboard")
 
-# ============================================================
-# PATHS
-# ============================================================
 MODEL_DIR = "models"
-DEFAULT_TEST_PATH = "test.csv"
-TARGET_COL = "target"
+DEFAULT_TEST = "test.csv"
+TARGET = "target"
 
-MODEL_FILES = {
-    "Logistic Regression": ("logistic_model.pkl", "scaler.pkl"),
-    "Random Forest": ("rf_model.pkl", "scaler.pkl"),
-    "SVM": ("svm_model.pkl", "scaler.pkl"),
+MODEL_MAP = {
+    "Logistic Regression": ("logistic_model.pkl", True),
+    "Decision Tree": ("decision_tree.pkl", False),
+    "KNN": ("knn.pkl", True),
+    "Naive Bayes": ("naive_bayes.pkl", True),
+    "Random Forest": ("random_forest.pkl", False),
+    "XGBoost": ("xgboost.pkl", True),
 }
 
 # ============================================================
 # SIDEBAR
 # ============================================================
-st.sidebar.header("⚙️ Controls")
-
 use_default = st.sidebar.checkbox("Use default test dataset")
-
-uploaded_file = None if use_default else st.sidebar.file_uploader(
-    "Upload Test CSV", type=["csv"]
-)
-
-model_name = st.sidebar.selectbox(
-    "Select Pretrained Model",
-    list(MODEL_FILES.keys())
-)
+uploaded = None if use_default else st.sidebar.file_uploader("Upload CSV", type=["csv"])
+model_name = st.sidebar.selectbox("Select Model", list(MODEL_MAP.keys()))
 
 # ============================================================
 # LOAD MODEL
 # ============================================================
-def load_model_and_scaler(choice):
-    model_file, scaler_file = MODEL_FILES[choice]
+model_file, needs_scaling = MODEL_MAP[model_name]
 
-    model_path = os.path.join(MODEL_DIR, model_file)
-    scaler_path = os.path.join(MODEL_DIR, scaler_file)
+model_path = os.path.join(MODEL_DIR, model_file)
+scaler_path = os.path.join(MODEL_DIR, "scaler.pkl")
 
-    if not os.path.exists(model_path):
-        st.error(f"Model not found: {model_path}")
-        st.stop()
+if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+    st.error("Model or scaler missing inside models/ folder.")
+    st.stop()
 
-    if not os.path.exists(scaler_path):
-        st.error(f"Scaler not found: {scaler_path}")
-        st.stop()
-
-    return joblib.load(model_path), joblib.load(scaler_path)
-
-
-model, scaler = load_model_and_scaler(model_name)
+model = joblib.load(model_path)
+scaler = joblib.load(scaler_path)
 
 # ============================================================
 # LOAD DATA
 # ============================================================
 def load_data():
-    if use_default:
-        if not os.path.exists(DEFAULT_TEST_PATH):
-            st.error("Default test.csv not found.")
-            st.stop()
-        return pd.read_csv(DEFAULT_TEST_PATH)
-
-    if uploaded_file:
-        return pd.read_csv(uploaded_file)
-
+    if use_default and os.path.exists(DEFAULT_TEST):
+        return pd.read_csv(DEFAULT_TEST)
+    if uploaded:
+        return pd.read_csv(uploaded)
     return None
-
 
 data = load_data()
 
 # ============================================================
-# TOP TABS (PLAYGROUND FIRST → DEFAULT LANDING)
+# TABS (PLAYGROUND FIRST → DEFAULT)
 # ============================================================
-tab_playground, tab_training, tab_readme = st.tabs(
+tab_play, tab_training, tab_readme = st.tabs(
     ["🧪 Playground", "📊 Training Insights", "📘 README"]
 )
 
 # ============================================================
-# ====================== PLAYGROUND ==========================
+# 🧪 PLAYGROUND
 # ============================================================
-with tab_playground:
+with tab_play:
 
     st.header("Prediction Playground")
 
     if data is None:
-        st.info("Upload or enable default test dataset from sidebar to begin.")
+        st.info("Upload or enable default dataset from sidebar.")
         st.stop()
 
-    # Remove unnamed columns
-    data = data.loc[:, ~data.columns.str.contains("^Unnamed")]
+    data = data.drop(columns=[c for c in data.columns if "Unnamed" in c], errors="ignore")
 
-    # Editable info message
-    st.success("You can edit the dataset below. Click **Run Prediction** after making changes.")
+    st.success("Dataset is editable. Modify values and click **Run Prediction**.")
 
-    # Editable dataframe
-    edited_df = st.data_editor(
-        data,
-        num_rows="dynamic",
-        use_container_width=True
-    )
+    edited = st.data_editor(data, use_container_width=True)
 
-    # Run prediction
-    if st.button("Run Prediction on Edited Data"):
+    if st.button("Run Prediction"):
 
-        if TARGET_COL not in edited_df.columns:
-            st.error(f"'{TARGET_COL}' column missing.")
+        if TARGET not in edited.columns:
+            st.error("Target column missing.")
             st.stop()
 
-        X_test = edited_df.drop(columns=[TARGET_COL])
-        y_test = edited_df[TARGET_COL]
+        X = edited.drop(columns=[TARGET])
+        y = edited[TARGET]
 
-        try:
-            X_test = X_test[scaler.feature_names_in_]
-        except Exception:
-            st.error("Feature mismatch with training data.")
-            st.stop()
+        if needs_scaling:
+            X = scaler.transform(X)
 
-        X_scaled = scaler.transform(X_test)
+        y_pred = model.predict(X)
+        y_prob = model.predict_proba(X)[:, 1]
 
-        # Predictions
-        y_pred = model.predict(X_scaled)
-        y_prob = model.predict_proba(X_scaled)[:, 1]
-
-        # Metrics
-        acc = accuracy_score(y_test, y_pred)
-        auc = roc_auc_score(y_test, y_prob)
-        prec = precision_score(y_test, y_pred)
-        rec = recall_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred)
-        mcc = matthews_corrcoef(y_test, y_pred)
-
-        # ================= DASHBOARD =================
-        st.subheader("Evaluation Summary")
+        acc = accuracy_score(y, y_pred)
+        auc = roc_auc_score(y, y_prob)
+        prec = precision_score(y, y_pred)
+        rec = recall_score(y, y_pred)
+        f1 = f1_score(y, y_pred)
+        mcc = matthews_corrcoef(y, y_pred)
 
         left, right = st.columns([2, 1])
 
@@ -156,74 +116,124 @@ with tab_playground:
             c1.metric("AUC", f"{auc:.3f}")
             c2.metric("Precision", f"{prec:.3f}")
             c2.metric("Recall", f"{rec:.3f}")
-            c3.metric("F1 Score", f"{f1:.3f}")
+            c3.metric("F1", f"{f1:.3f}")
             c3.metric("MCC", f"{mcc:.3f}")
 
         with right:
-            cm = confusion_matrix(y_test, y_pred)
-            st.dataframe(
-                pd.DataFrame(
-                    cm,
-                    index=["Actual 0", "Actual 1"],
-                    columns=["Pred 0", "Pred 1"]
-                ),
-                use_container_width=True
-            )
-
-        # ================= SAMPLE PREDICTIONS =================
-        st.subheader("Sample Predictions")
-
-        preview_df = edited_df.copy().head(10)
-        preview_df["Prediction"] = y_pred[:10]
-
-        def color_pred(val):
-            return (
-                "background-color: rgba(34,197,94,0.25);"
-                if val == 1
-                else "background-color: rgba(239,68,68,0.25);"
-            )
-
-        st.dataframe(
-            preview_df.style.applymap(color_pred, subset=["Prediction"]),
-            use_container_width=True
-        )
+            cm = confusion_matrix(y, y_pred)
+            st.dataframe(pd.DataFrame(cm))
 
 # ============================================================
-# =================== TRAINING INSIGHTS ======================
+# 📊 TRAINING INSIGHTS (ROBUST AUTO-INIT)
 # ============================================================
 with tab_training:
 
     st.header("Training Insights")
 
+    summary_path = os.path.join(MODEL_DIR, "training_summary.pkl")
+    scores_path = os.path.join(MODEL_DIR, "training_scores.pkl")
+
+    # ---------- Ensure training_scores exists ----------
+    if not os.path.exists(scores_path):
+        st.error("training_scores.pkl missing in models/.")
+        st.info("Run training pipeline once to generate evaluation metrics.")
+        st.stop()
+
+    training_scores = joblib.load(scores_path)
+
+    # ---------- Auto-generate training summary ----------
+    if not os.path.exists(summary_path):
+
+        st.warning("training_summary.pkl missing → generating automatically...")
+
+        summary = {}
+
+        for name, (file, _) in MODEL_MAP.items():
+
+            model_file_path = os.path.join(MODEL_DIR, file)
+
+            if not os.path.exists(model_file_path):
+                continue
+
+            model_obj = joblib.load(model_file_path)
+
+            params = model_obj.get_params() if hasattr(model_obj, "get_params") else {}
+
+            convergence = "Trained successfully"
+            if "max_iter" in params:
+                convergence = f"Max iterations = {params['max_iter']}"
+
+            if hasattr(model_obj, "n_iter_"):
+                try:
+                    convergence = f"Converged in {model_obj.n_iter_} iterations"
+                except Exception:
+                    pass
+
+            scores = training_scores.get(file, {})
+
+            summary[name] = {
+                "hyperparameters": params,
+                "convergence": convergence,
+                "scores": scores,
+            }
+
+        joblib.dump(summary, summary_path)
+        st.success("training_summary.pkl generated successfully.")
+
+    # ---------- Load summary ----------
+    summary = joblib.load(summary_path)
+
+    if not summary:
+        st.error("Training summary is empty.")
+        st.stop()
+
+    # ---------- Display table ----------
+    rows = []
+    for model_name, info in summary.items():
+        scores = info.get("scores", {})
+        rows.append({
+            "Model": model_name,
+            "Accuracy": scores.get("accuracy"),
+            "AUC": scores.get("auc"),
+            "Precision": scores.get("precision"),
+            "Recall": scores.get("recall"),
+            "F1": scores.get("f1"),
+            "Convergence": info.get("convergence"),
+        })
+
+    st.subheader("Model Performance Summary")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.divider()
+
+    # ---------- ROC / PR / Class Distribution ----------
     roc_path = os.path.join(MODEL_DIR, "roc_data.pkl")
     pr_path = os.path.join(MODEL_DIR, "pr_data.pkl")
     class_path = os.path.join(MODEL_DIR, "class_dist.pkl")
 
-    if not os.path.exists(roc_path):
-        st.info("Training insight files not found. Run training save script.")
-    else:
+    if os.path.exists(roc_path) and os.path.exists(pr_path):
         roc_data = joblib.load(roc_path)
         pr_data = joblib.load(pr_path)
-        class_dist = joblib.load(class_path)
 
         st.subheader("ROC Curve")
         st.line_chart(pd.DataFrame({"TPR": roc_data["tpr"]}, index=roc_data["fpr"]))
 
         st.subheader("Precision-Recall Curve")
         st.line_chart(pd.DataFrame({"Precision": pr_data["precision"]}, index=pr_data["recall"]))
+    else:
+        st.warning("ROC / PR data not found.")
 
+    if os.path.exists(class_path):
+        class_dist = joblib.load(class_path)
         st.subheader("Class Distribution")
         st.bar_chart(class_dist)
 
 # ============================================================
-# ======================== README ============================
+# 📘 README
 # ============================================================
 with tab_readme:
 
-    st.header("Project Documentation")
-
     if os.path.exists("README.md"):
-        with open("README.md", "r", encoding="utf-8") as f:
-            st.markdown(f.read())
+        st.markdown(open("README.md", encoding="utf-8").read())
     else:
-        st.info("README.md not found in project folder.")
+        st.info("README.md not found.")
