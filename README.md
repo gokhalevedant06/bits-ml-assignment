@@ -22,11 +22,11 @@
 | ML Model Name | Observation about model performance |
 |---------------|-------------------------------------|
 | Logistic Regression | Achieves very high accuracy and AUC, indicating that the dataset is close to linearly separable. Provides strong baseline performance with excellent interpretability. |
-| Decision Tree | Performs well but slightly below ensemble models. Susceptible to overfitting and variance, which explains marginally lower AUC and recall. |
+| Decision Tree | Performs well but slightly below ensemble models. Prone to overfitting, which explains marginally lower AUC and recall. |
 | kNN | Lowest overall performance among tested models. Sensitive to feature scaling and local noise, leading to reduced accuracy and F1 compared to other approaches. |
 | Naive Bayes | Shows strong AUC despite independence assumptions. Performs better than kNN but slightly below tree-based ensembles in overall accuracy. |
 | Random Forest (Ensemble) | Matches Logistic Regression in accuracy while improving robustness through ensemble averaging. Demonstrates strong generalization and stability. |
-| XGBoost (Ensemble) | **Best performing model** across all metrics. Extremely high AUC and balanced precision-recall indicate superior ability to capture complex nonlinear relationships. |
+| XGBoost (Ensemble) | **Best performing model** across all metrics. Extremely high AUC and balanced precision-recall indicate superior ability to capture complex relationships. |
 
 ---
 
